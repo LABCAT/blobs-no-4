@@ -57,7 +57,7 @@ body {
   left: calc(50% - 60px);
   width: 120px;
   height: 120px;
-  fill: transparent;
+  fill: white;
   z-index: 999;
   opacity: 1;
   transition: opacity 1s;

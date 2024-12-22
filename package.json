@@ -1,7 +1,7 @@
 {
-  "name": "blobs-no-3",
+  "name": "blobs-no-4",
   "version": "1.0.0",
-  "homepage": "https://blobs-no-3",
+  "homepage": "https://blobs-no-4.labcat.nz",
   "private": true,
   "dependencies": {
     "@testing-library/jest-dom": "^5.11.4",
