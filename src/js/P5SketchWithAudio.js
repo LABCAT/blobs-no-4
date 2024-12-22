@@ -2,50 +2,96 @@ import React, { useRef, useEffect } from "react";
 import "./helpers/Globals";
 import "p5/lib/addons/p5.sound";
 import * as p5 from "p5";
-import { Midi } from '@tonejs/midi'
+import { Midi } from '@tonejs/midi';
+import Matter from 'matter-js';
+import { createNoise4D } from "simplex-noise";
+
 import PlayIcon from './functions/PlayIcon.js';
-import AnimatedBlob from './classes/AnimatedBlob.js';
+import audio from "../audio/blobs-no-4.ogg";
+import midi from "../audio/blobs-no-4.mid";
 
-import blobshape from "blobshape";
-import { TriadicColourCalculator } from './functions/ColourCalculators';
-
-import audio from "../audio/blobs-no-3.ogg";
-import midi from "../audio/blobs-no-3.mid";
-
-/**
- * Blobs No. 3
- */
 const P5SketchWithAudio = () => {
     const sketchRef = useRef();
 
     const Sketch = p => {
+        const MAX_DENSITY = 150;
+        let blobs = new Map();
+        let started, idCount;
+
+        const Engine = Matter.Engine;
+        const Runner = Matter.Runner;
+        const Bodies = Matter.Bodies;
+        const Composite = Matter.Composite;
+
+        const engine = Engine.create({
+            gravity: { x: 0, y: 4 }
+        });;
+        const world = engine.world;
+        const runner = Runner.create();
 
         p.canvas = null;
-
         p.canvasWidth = window.innerWidth;
-
         p.canvasHeight = window.innerHeight;
-
         p.audioLoaded = false;
-
-        p.player = null;
-
         p.PPQ = 3840 * 4;
 
-        p.loadMidi = () => {
-            Midi.fromUrl(midi).then(
-                function(result) {
-                    console.log(result);
-                    const noteSet1 = result.tracks[19].notes; // Wave Layers Edition - Mallet Bass
-                    p.scheduleCueSet(noteSet1, 'executeCueSet1');
-                    const noteSet2 = result.tracks[21].notes; 
-                    p.scheduleCueSet(noteSet2, 'executeCueSet2'); // Europa - Blower Bass
-                    p.audioLoaded = true;
-                    document.getElementById("loader").classList.add("loading--complete");
-                    document.getElementById("play-icon").classList.remove("fade-out");
-                }
-            );
+        const simplexNoiseSeed = p.random();
+        const noise4D = createNoise4D(() => simplexNoiseSeed);
+
+        const drawBlob = (radius, noiseWeight, amount, t, nxOff, nyOff) => {
+            p.strokeWeight(4);
+            p.push();
+            p.beginShape();
+            for (let i = 0; i < (p.TWO_PI / amount) * (amount + 3); i += p.TWO_PI / amount) {
+                const x = p.cos(i) * radius;
+                const y = p.sin(i) * radius;
+                const nx = noise4D(x + nxOff.x, y + nxOff.y, p.cos(t), p.sin(t));
+                const ny = noise4D(x + nyOff.x, y + nyOff.y, p.cos(t), p.sin(t));
+                p.curveVertex(x + nx * noiseWeight, y + ny * noiseWeight);
+            }
+            p.endShape();
+            p.pop();
+        }
+
+        const Blob = (x, y, r, color, fill) => {
+            const body = Bodies.circle(x, y, r, { 
+                angle: p.random(p.TWO_PI), 
+                restitution: 0.5 
+            });
+            const nxOff = { x: p.random(1000), y: p.random(1000) };
+            const nyOff = { x: p.random(1000), y: p.random(1000) };
+            Composite.add(world, body);
             
+            return {
+                body,
+                show: () => {
+                    p.push();
+                    p.stroke(color);
+                    if (fill) p.fill(color);
+                    else p.noFill();
+                    p.translate(body.position.x, body.position.y);
+                    p.rotate(body.angle);
+                    drawBlob(r * 0.75, 5, 5, p.frameCount * 0.01, nxOff, nyOff);
+                    p.pop();
+                },
+                remove: () => Composite.remove(world, body)
+            };
+        }
+
+        p.loadMidi = () => {
+            Midi.fromUrl(midi).then(result => {
+                console.log(result);
+                
+                const noteSet1 = result.tracks[8].notes; //Reactor 6 - Lazerbass - Eraser-Bass
+                p.scheduleCueSet(noteSet1, 'executeCueSet1');
+                const noteSet2 = result.tracks[2].notes; // Combinator - Sparkly Guitar
+                p.scheduleCueSet(noteSet2, 'executeCueSet2');
+                const noteSet3 = result.tracks[1].notes; // Combinator - Sparkly Guitar
+                p.scheduleCueSet(noteSet3, 'executeCueSet3');
+                p.audioLoaded = true;
+                document.getElementById("loader").classList.add("loading--complete");
+                document.getElementById("play-icon").classList.remove("fade-out");
+            });
         }
 
         p.preload = () => {
@@ -53,9 +99,8 @@ const P5SketchWithAudio = () => {
             p.song.onended(p.logCredits);
         }
 
-        p.scheduleCueSet = (noteSet, callbackName, poly = false)  => {
-            let lastTicks = -1,
-                currentCue = 1;
+        p.scheduleCueSet = (noteSet, callbackName, poly = false) => {
+            let lastTicks = -1, currentCue = 1;
             for (let i = 0; i < noteSet.length; i++) {
                 const note = noteSet[i],
                     { ticks, time } = note;
@@ -66,152 +111,119 @@ const P5SketchWithAudio = () => {
                     currentCue++;
                 }
             }
-        } 
+        }
 
-        p.animatedBlobs = [];
-
-        p.blobsArray = [];
+        const init = () => {
+            started = false
+            idCount = 0
+            engine.world.bodies = [];
+            buildWall(p.width, p.height)
+        }
 
         p.setup = () => {
             p.canvas = p.createCanvas(p.canvasWidth, p.canvasHeight);
             p.colorMode(p.HSB);
-            p.background(0, 0, 0);
+            init()
+		    Runner.run(runner, engine)
         }
 
         p.draw = () => {
-            if(p.audioLoaded && p.song.isPlaying()){
-                p.background(0, 0, 0);
-                p.strokeWeight(4);
+            p.background(0);
+            blobs.forEach((blob) => {
+                p.push();
+                p.fill(255);
+                blob.show();
+                p.pop();
+            });
 
-                for (let i = 0; i < p.animatedBlobs.length; i++) {
-                    const blob = p.animatedBlobs[i];
-                    blob.draw();
-                    blob.update();
-                }
-
-                p.strokeWeight(2);
-
-                for (let i = 0; i < p.blobsArray.length; i++) {
-                    const blob = p.blobsArray[i];
-                    const { x, y, growth, edges, colourSet, divisor, seed, whiteStroke } = blob;
-
-                    p.drawBlob(x, y, (p.width / (divisor * 0.9)), growth, edges, colourSet[0], seed, whiteStroke);
-                    p.drawBlob(x, y, (p.width / (divisor * 1.2)), growth, edges, colourSet[1], seed, false);
-                    p.drawBlob(x, y, (p.width / (divisor * 1.5)), growth, edges, colourSet[2], seed, whiteStroke);
-                }
-            }
+            showWall()
         }
-
-        p.drawBlob = (x, y, size, growth, edges, color, seed, whiteStroke) => {
-            const { path } = blobshape({ size: size, growth: growth, edges: edges, seed: seed });
-            const pathArray = p.parseSVGPath(path);
-            p.translate(x - (size / 2), y - (size / 2));
-            p.fill(
-                color._getHue(),
-                100,
-                100,
-                0.5
-            );
-            p.stroke(
-                color._getHue(),
-                whiteStroke ? 0 : 100,
-                100,
-                1
-            );
-            p.beginShape();
-            for (let cmd of pathArray) {
-                let command = cmd[0];
-                let params = cmd.slice(1);
-                
-                if (command === 'M') {
-                    p.vertex(params[0], params[1]);
-                } else if (command === 'Q') {
-                    p.quadraticVertex(params[0], params[1], params[2], params[3]);
-                }
-            }
-            p.endShape(p.CLOSE);
-            p.translate(-x + (size / 2), -y + (size / 2));
-        }
-
-        p.parseSVGPath = (pathData) => {
-            let commands = pathData.match(/[a-df-z][^a-df-z]*/gi);
-            let pathArray = [];
-            
-            for (let cmd of commands) {
-                let command = cmd.charAt(0);
-                let params = cmd.slice(1).split(/[\s,]+/).map(Number);
-                pathArray.push([command, ...params]);
-            }
-            
-            return pathArray;
-        }
-
-        p.sizes = [8, 12, 16, 24, 32];
-        p.maxEdges = 16;
 
         p.executeCueSet1 = ({currentCue}) => {
-            if(currentCue === 37){
-                p.blobsArray = [];
-                p.sizes = [8, 12, 16];
-                p.maxEdges = 32;
+            if(currentCue > 1 && currentCue < 162 && currentCue % 18 === 1) {
+                removeWall()
+                setTimeout(() => {
+                    blobs = new Map();
+                    init()    
+                }, 500);
             }
-            let tries = 0;
-            const maxTries = 100;  // Limit the number of attempts to avoid infinite loops
-
-            let isOverlapping = true;
-            while (isOverlapping && tries < maxTries) {
-                const divisor = p.random(p.sizes);
-                const hue = p.random(0, 360);
-                const newCircle = {
-                    x: p.random(0, p.width),
-                    y: p.random(0, p.height),
-                    radius: p.width / (divisor * 0.9) / 2,
-                    growth: parseInt(p.random(3, 9)),
-                    edges: parseInt(p.random(8, p.maxEdges)),
-                    colourSet: TriadicColourCalculator(p, hue),
-                    divisor: divisor,
-                    seed: p.random(1, 10),
-                    whiteStroke: [9, 10, 11, 0].includes(currentCue % 12)
-                };
-
-                isOverlapping = false;
-
-                // Check against all existing circles for overlap
-                for (let i = 0; i < p.blobsArray.length; i++) {
-                    const existingCircle = p.blobsArray[i];
-                    const dist = p.dist(newCircle.x, newCircle.y, existingCircle.x, existingCircle.y);
-                    if (dist < newCircle.radius + existingCircle.radius) {
-                        isOverlapping = true;
-                        break;
-                    }
-                }
-
-                tries++;
-                // If no overlap, add it to the array
-                if (!isOverlapping) {
-                    p.blobsArray.push(newCircle);
-                }
-            }
-
-            // Optionally handle case where maxTries was reached without success
-            if (tries >= maxTries) {
-                console.log("Max attempts reached. Could not place the circle without overlap.");
-            }
+            const count = p.floor(p.random(3, 6));
+            const hue = p.random(230, 260);
+            const colour = p.color(hue, p.random(80, 100), p.random(60, 80), p.random(0.6, 0.9));
+            addRandomBlobs(1, colour)
         };
 
-        p.executeCueSet2 = ({currentCue}) => {
-            if(currentCue % 12 === 1) {
-                p.animatedBlobs = [];
-            }
-            const x = p.random(0, p.width);
-            const y = p.random(0, p.height);
-            p.animatedBlobs.push(
-                new AnimatedBlob(p, x, y)
-            );
+        p.executeCueSet2 = () => {
+            const count = p.floor(p.random(3, 6));
+            const hue = p.random(60, 120);
+            const colour = p.color(hue, p.random(70, 90), p.random(60, 80), p.random(0.6, 0.9));
+            addRandomBlobs(1, colour)
         }
 
+        p.executeCueSet3 = () => {
+            const count = p.floor(p.random(3, 6));
+            const hue = p.random(0, 40);
+            const colour = p.color(hue, p.random(60, 100), p.random(80, 100), p.random(0.6, 0.9));
+            addRandomBlobs(1, colour)
+        }
 
-        p.hasStarted = false;
+        const addRandomBlobs = (count, color) => {
+            for(let i = 0; i < count; i++) {
+                if (idCount < MAX_DENSITY) {
+                    idCount++;
+                    const pos = [p.random(p.width), p.random(p.height * 0.1)];
+                    const baseSize = p.canvasWidth * 0.06;
+                    const nodeNum = p.random([baseSize * 0.4, baseSize * 0.8, baseSize * 1.2]);
+                    const isFill = p.random([false, true]);
+                    blobs.set(idCount, Blob(...pos, nodeNum, color, isFill));
+                }
+            }
+        }
+
+        const MAX_THICKNESS = 50;
+        const walls = {};
+
+        const Wall = (x, y, w, h, dir, opt) => {
+            const body = Bodies.rectangle(x, y, w, h, opt);
+            let thickness = 0;
+            Composite.add(world, body);
+            return {
+                body,
+                show: () => {
+                    p.push();
+                    p.translate(body.position.x, body.position.y);
+                    p.rotate(body.angle);
+                    p.rectMode(p.CENTER);
+                    p.noStroke();
+                    if (dir === "hor") p.rect(0, 0, p.min((thickness += 5), w), h);
+                    if (dir === "ver") p.rect(0, 0, w, p.min((thickness += 5), h));
+                    p.pop();
+                },
+                remove: () => Composite.remove(world, body)
+            };
+        };
+
+        const buildWall = (w, h) => {
+            const opt = { isStatic: true };
+            walls.t = Wall(w/2, 0, w, MAX_THICKNESS, "ver", opt);
+            walls.b = Wall(w/2, h, w, MAX_THICKNESS, "ver", opt);
+            walls.r = Wall(w, h/2, MAX_THICKNESS, h, "hor", opt);
+            walls.l = Wall(0, h/2, MAX_THICKNESS, h, "hor", opt);
+        };
+
+        const showWall = () => {
+            walls.t.show()
+            walls.b.show()
+            walls.r.show()
+            walls.l.show()
+        }
+
+        const removeWall = () => {
+            walls.t.remove()
+            walls.b.remove()
+            walls.r.remove()
+            walls.l.remove()
+        }
 
         p.mousePressed = () => {
             if(p.audioLoaded){
@@ -220,35 +232,10 @@ const P5SketchWithAudio = () => {
                 } else {
                     if (parseInt(p.song.currentTime()) >= parseInt(p.song.buffer.duration)) {
                         p.reset();
-                        if (typeof window.dataLayer !== typeof undefined){
-                            window.dataLayer.push(
-                                { 
-                                    'event': 'play-animation',
-                                    'animation': {
-                                        'title': document.title,
-                                        'location': window.location.href,
-                                        'action': 'replaying'
-                                    }
-                                }
-                            );
-                        }
                     }
                     document.getElementById("play-icon").classList.add("fade-out");
                     p.canvas.addClass("fade-in");
                     p.song.play();
-                    if (typeof window.dataLayer !== typeof undefined && !p.hasStarted){
-                        window.dataLayer.push(
-                            { 
-                                'event': 'play-animation',
-                                'animation': {
-                                    'title': document.title,
-                                    'location': window.location.href,
-                                    'action': 'start playing'
-                                }
-                            }
-                        );
-                        p.hasStarted = false
-                    }
                 }
             }
         }
@@ -256,22 +243,15 @@ const P5SketchWithAudio = () => {
         p.creditsLogged = false;
 
         p.logCredits = () => {
-            if (
-                !p.creditsLogged &&
-                parseInt(p.song.currentTime()) >= parseInt(p.song.buffer.duration)
-            ) {
+            if (!p.creditsLogged && parseInt(p.song.currentTime()) >= parseInt(p.song.buffer.duration)) {
                 p.creditsLogged = true;
-                    console.log(
-                    "Music By: http://labcat.nz/",
-                    "\n",
-                    "Animation By: https://github.com/LABCAT/"
-                );
+                console.log("Music By: http://labcat.nz/", "\n", "Animation By: https://github.com/LABCAT/");
                 p.song.stop();
             }
         };
 
         p.reset = () => {
-
+            p.background(0);
         }
 
         p.updateCanvasDimensions = () => {
@@ -281,24 +261,10 @@ const P5SketchWithAudio = () => {
         }
 
         if (window.attachEvent) {
-            window.attachEvent(
-                'onresize',
-                function () {
-                    p.updateCanvasDimensions();
-                }
-            );
+            window.attachEvent('onresize', () => p.updateCanvasDimensions());
         }
         else if (window.addEventListener) {
-            window.addEventListener(
-                'resize',
-                function () {
-                    p.updateCanvasDimensions();
-                },
-                true
-            );
-        }
-        else {
-            //The browser does not support Javascript event binding
+            window.addEventListener('resize', () => p.updateCanvasDimensions(), true);
         }
     };
 
